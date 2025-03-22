@@ -4,9 +4,10 @@ import { weatherWorkflow } from "./workflows";
 import { weatherAgent } from "./agents";
 import { chefAgent } from "./agents";
 import { stockAgent } from "./agents/stock-agent";
+import { candidateWorkflow } from "./workflows/workflow";
 
 export const mastra = new Mastra({
-	workflows: { weatherWorkflow },
+	workflows: { weatherWorkflow, candidateWorkflow },
 	agents: { weatherAgent, chefAgent, stockAgent },
 	logger: createLogger({
 		name: "Mastra",
