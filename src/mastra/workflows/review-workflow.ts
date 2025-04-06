@@ -19,8 +19,6 @@ const pullRequestSchema = z.object({
 	reviewComments: z.string(),
 });
 
-type PullRequest = z.infer<typeof pullRequestSchema>;
-
 const pullRequestReviewSchema = z.object({
 	event: z.enum(["REQUEST_CHANGES", "COMMENT", "APPROVE"]),
 	body: z.string(),
@@ -36,19 +34,24 @@ const pullRequestReviewSchema = z.object({
 		}),
 	),
 });
-type PullRequestReview = z.infer<typeof pullRequestReviewSchema>;
 
-// PRの内容を取得するステップ
+const triggerSchema = pullRequestPathSchema;
+type Trigger = z.infer<typeof triggerSchema>;
+
+export const prReviewWorkflow = new Workflow({
+	name: "pr-review-workflow",
+	triggerSchema,
+});
+
 const getPRInfo = new Step({
 	id: "getPRInfo",
-	inputSchema: pullRequestPathSchema,
 	outputSchema: z.object({
 		pullRequestPath: pullRequestPathSchema,
 		pullRequest: pullRequestSchema,
 	}),
 	execute: async ({ context }) => {
 		const { owner, repo, pullRequestNumber } =
-			context.getStepResult<PullRequestPath>("trigger");
+			context.getStepResult<Trigger>("trigger");
 
 		const ghClient = await github.getApiClient();
 
@@ -63,14 +66,13 @@ const getPRInfo = new Step({
 		if (!pullRequest.data) {
 			throw new Error("PRが見つかりません");
 		}
-		console.log(pullRequest.data);
 
-		const diff = await (await fetch(pullRequest.data.diff_url)).text();
-		const comments = await (await fetch(pullRequest.data.comments_url)).text();
-		const commits = await (await fetch(pullRequest.data.commits_url)).text();
-		const reviewComments = await (
-			await fetch(pullRequest.data.review_comment_url)
-		).text();
+		const [diff, comments, commits, reviewComments] = await Promise.all([
+			fetch(pullRequest.data.diff_url).then((res) => res.text()),
+			fetch(pullRequest.data.comments_url).then((res) => res.text()),
+			fetch(pullRequest.data.commits_url).then((res) => res.text()),
+			fetch(pullRequest.data.review_comment_url).then((res) => res.text()),
+		]);
 
 		return {
 			pullRequest: {
@@ -102,10 +104,7 @@ const reviewPR = new Step({
 		pullRequestReview: pullRequestReviewSchema,
 	}),
 	execute: async ({ context }) => {
-		const { pullRequestPath, pullRequest } = context.getStepResult<{
-			pullRequestPath: PullRequestPath;
-			pullRequest: PullRequest;
-		}>("getPRInfo");
+		const { pullRequestPath, pullRequest } = context.getStepResult(getPRInfo);
 
 		const prompt = `タイトル: ${pullRequest.title}
 			説明: ${pullRequest.body || ""}
@@ -131,10 +130,8 @@ const sendReview = new Step({
 		pullRequestReview: pullRequestReviewSchema,
 	}),
 	execute: async ({ context }) => {
-		const { pullRequestPath, pullRequestReview } = context.getStepResult<{
-			pullRequestPath: PullRequestPath;
-			pullRequestReview: PullRequestReview;
-		}>("reviewPR");
+		const { pullRequestPath, pullRequestReview } =
+			context.getStepResult(reviewPR);
 
 		const ghClient = await github.getApiClient();
 		const result = await ghClient.pullsCreateReview({
@@ -154,12 +151,6 @@ const sendReview = new Step({
 
 		return result;
 	},
-});
-
-// ワークフローの定義
-export const prReviewWorkflow = new Workflow({
-	name: "pr-review-workflow",
-	triggerSchema: pullRequestPathSchema,
 });
 
 prReviewWorkflow.step(getPRInfo).then(reviewPR).then(sendReview).commit();
